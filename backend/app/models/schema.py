@@ -1,6 +1,7 @@
 """Pydantic models for the CAD Generator API."""
 
 from typing import Any, Dict, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -14,16 +15,16 @@ class ExecuteRequest(BaseModel):
     code: str = Field(default="", description="CadQuery Python source code.")
     export_format: ExportFormat = Field(default="gltf")
     user_prompt: str = Field(default="")
-    user_id: Optional[str] = Field(default=None)
-    project_id: Optional[str] = Field(default=None)
-    parent_generation_id: Optional[str] = Field(default=None)
+    user_id: Optional[UUID] = Field(default=None)
+    project_id: Optional[UUID] = Field(default=None)
+    parent_generation_id: Optional[UUID] = Field(default=None)
 
 
 class ProjectCreateRequest(BaseModel):
     """Payload for creating a project."""
 
     title: str = Field(min_length=1, max_length=200)
-    user_id: Optional[str] = None
+    user_id: Optional[UUID] = None
 
 
 class ProjectResponse(BaseModel):

@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from uuid import UUID, uuid4
 
 from app.config import settings
 from app.models.schema import (
@@ -17,7 +18,6 @@ from app.services.cad_executor import (
     export_all_formats,
 )
 from app.services.supabase_service import SupabaseService, artifact_path
-from uuid import uuid4
 
 app = FastAPI(title=settings.app_name, version="1.0.0")
 
@@ -42,14 +42,18 @@ def health() -> dict[str, str]:
 def create_project(request: ProjectCreateRequest) -> ProjectResponse:
     """Create and return a new Supabase project."""
 
-    return ProjectResponse(**SupabaseService().create_project(request.title, request.user_id))
+    user_id = str(request.user_id) if request.user_id else None
+    return ProjectResponse(**SupabaseService().create_project(request.title, user_id))
 
 
 @app.get("/projects", response_model=list[ProjectResponse])
-def list_projects(user_id: str = Query(..., description="Supabase user UUID.")) -> list[ProjectResponse]:
+def list_projects(user_id: UUID = Query(..., description="Supabase user UUID.")) -> list[ProjectResponse]:
     """Return all projects belonging to a user."""
 
-    return [ProjectResponse(**project) for project in SupabaseService().list_projects(user_id)]
+    return [
+        ProjectResponse(**project)
+        for project in SupabaseService().list_projects(str(user_id))
+    ]
 
 
 @app.post("/execute", response_model=ExecuteResponse)
@@ -66,10 +70,11 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
         execution = execute_cadquery_with_target(request.code, request.export_format)
         response = execution.response
         service = SupabaseService()
-        project_id = request.project_id
+        project_id = str(request.project_id) if request.project_id else None
         if not project_id:
             title = request.user_prompt.strip()[:200] or "Untitled CAD Project"
-            project = service.create_project(title, request.user_id)
+            user_id = str(request.user_id) if request.user_id else None
+            project = service.create_project(title, user_id)
             project_id = str(project["id"])
 
         if project_id:
@@ -94,7 +99,11 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
                 code=request.code,
                 status="completed",
                 artifacts_urls=artifact_urls,
-                parent_id=request.parent_generation_id,
+                parent_id=(
+                    str(request.parent_generation_id)
+                    if request.parent_generation_id
+                    else None
+                ),
             )
             response.generation_id = str(record["id"])
             response.project_id = project_id
@@ -112,7 +121,7 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
 
 
 @app.get("/projects/{project_id}/history")
-def project_history(project_id: str) -> list[dict]:
+def project_history(project_id: UUID) -> list[dict]:
     """Return all saved generations for a project in version order."""
 
-    return SupabaseService().get_project_history(project_id)
+    return SupabaseService().get_project_history(str(project_id))
