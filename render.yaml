@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: cad-generator-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    autoDeploy: true

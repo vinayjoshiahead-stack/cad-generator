@@ -49,6 +49,16 @@ docker run --rm -p 10000:10000 cad-generator-backend
 
 ## Render deployment
 
-Create a Render **Web Service** connected to this repository. Set the root directory to `backend` if Render supports the monorepo setting, or use the repository root with Dockerfile path `backend/Dockerfile`. Use Docker deployment and expose port `10000`. The included image starts Uvicorn on `0.0.0.0:10000`, which matches Render's expected public service port.
+The Dockerfile is inside `backend/`, not at the repository root. In the Render dashboard, create a **Web Service** with these settings:
+
+- **Environment:** `Docker`
+- **Root Directory:** `backend`
+- **Dockerfile Path:** `./Dockerfile`
+- **Docker Command:** leave blank
+- **Port:** `10000`
+
+Do not set the root directory to the repository root while using `./Dockerfile`; that produces `failed to read dockerfile: open Dockerfile: no such file or directory`. Alternatively, from the repository root set the Dockerfile path to `backend/Dockerfile` and leave the root directory blank. The included `render.yaml` provides the recommended `backend` root-directory configuration when deploying through a Render Blueprint.
+
+The included image starts Uvicorn on `0.0.0.0:10000`, which matches Render's expected public service port.
 
 The script runner uses an isolated `exec` namespace with restricted builtins and an import allowlist. Python `exec` is not a security boundary against a determined attacker; for untrusted public traffic, run this service in a separately hardened sandbox/container with resource, network, filesystem, and process limits.
