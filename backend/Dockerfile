@@ -8,6 +8,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libgl1 \
         libglu1-mesa \
+        libxrender1 \
+        libxext6 \
+        libsm6 \
+        libice6 \
         libgomp1 \
         git \
     && rm -rf /var/lib/apt/lists/*
