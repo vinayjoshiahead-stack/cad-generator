@@ -1,10 +1,16 @@
 """FastAPI application entry point."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.models.schema import ArtifactUrls, ExecuteRequest, ExecuteResponse
+from app.models.schema import (
+    ArtifactUrls,
+    ExecuteRequest,
+    ExecuteResponse,
+    ProjectCreateRequest,
+    ProjectResponse,
+)
 from app.services.cad_executor import (
     CadExecutionError,
     execute_cadquery_with_target,
@@ -32,6 +38,20 @@ def health() -> dict[str, str]:
     return {"status": "ok", "engine": "CadQuery"}
 
 
+@app.post("/projects", response_model=ProjectResponse)
+def create_project(request: ProjectCreateRequest) -> ProjectResponse:
+    """Create and return a new Supabase project."""
+
+    return ProjectResponse(**SupabaseService().create_project(request.title, request.user_id))
+
+
+@app.get("/projects", response_model=list[ProjectResponse])
+def list_projects(user_id: str = Query(..., description="Supabase user UUID.")) -> list[ProjectResponse]:
+    """Return all projects belonging to a user."""
+
+    return [ProjectResponse(**project) for project in SupabaseService().list_projects(user_id)]
+
+
 @app.post("/execute", response_model=ExecuteResponse)
 def execute(request: ExecuteRequest) -> ExecuteResponse:
     """Execute a CadQuery program and return its encoded export."""
@@ -45,8 +65,14 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
     try:
         execution = execute_cadquery_with_target(request.code, request.export_format)
         response = execution.response
-        if request.project_id:
-            service = SupabaseService()
+        service = SupabaseService()
+        project_id = request.project_id
+        if not project_id:
+            title = request.user_prompt.strip()[:200] or "Untitled CAD Project"
+            project = service.create_project(title, request.user_id)
+            project_id = str(project["id"])
+
+        if project_id:
             generation_id = str(uuid4())
             artifact_urls = {}
             extensions = {"gltf": "glb", "step": "step", "stl": "stl", "svg": "svg"}
@@ -59,11 +85,11 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
             for export_format, (file_bytes, content_type, _) in export_all_formats(execution.target).items():
                 artifact_urls[url_keys[export_format]] = service.upload_artifact(
                     file_bytes,
-                    artifact_path(request.project_id, generation_id, extensions[export_format]),
+                    artifact_path(project_id, generation_id, extensions[export_format]),
                     content_type,
                 )
             record = service.save_generation_record(
-                project_id=request.project_id,
+                project_id=project_id,
                 user_prompt=request.user_prompt,
                 code=request.code,
                 status="completed",
@@ -71,6 +97,7 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
                 parent_id=request.parent_generation_id,
             )
             response.generation_id = str(record["id"])
+            response.project_id = project_id
             response.artifact_urls = ArtifactUrls(**artifact_urls)
         return response
     except CadExecutionError as exc:

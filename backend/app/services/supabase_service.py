@@ -32,6 +32,25 @@ class SupabaseService:
         )
         return self.client.storage.from_(self.bucket_name).get_public_url(file_path)
 
+    def create_project(self, title: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a project and return the generated project record."""
+
+        response = self.client.table("projects").insert(
+            {"title": title, "user_id": user_id}
+        ).execute()
+        if not response.data:
+            raise RuntimeError("Supabase did not return the inserted project")
+        return response.data[0]
+
+    def list_projects(self, user_id: Optional[str] = None) -> list[Dict[str, Any]]:
+        """Return projects, optionally filtered by owner."""
+
+        query = self.client.table("projects").select("*")
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.order("updated_at", desc=True).execute()
+        return response.data or []
+
     def save_generation_record(
         self,
         project_id: str,

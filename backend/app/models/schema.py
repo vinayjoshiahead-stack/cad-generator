@@ -14,8 +14,26 @@ class ExecuteRequest(BaseModel):
     code: str = Field(default="", description="CadQuery Python source code.")
     export_format: ExportFormat = Field(default="gltf")
     user_prompt: str = Field(default="")
+    user_id: Optional[str] = Field(default=None)
     project_id: Optional[str] = Field(default=None)
     parent_generation_id: Optional[str] = Field(default=None)
+
+
+class ProjectCreateRequest(BaseModel):
+    """Payload for creating a project."""
+
+    title: str = Field(min_length=1, max_length=200)
+    user_id: Optional[str] = None
+
+
+class ProjectResponse(BaseModel):
+    """Project metadata returned by the API."""
+
+    id: str
+    user_id: Optional[str] = None
+    title: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class ArtifactUrls(BaseModel):
@@ -46,4 +64,5 @@ class ExecuteResponse(BaseModel):
     error: Optional[ExecutionErrorResponse] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     generation_id: Optional[str] = None
+    project_id: Optional[str] = None
     artifact_urls: Optional[ArtifactUrls] = None
