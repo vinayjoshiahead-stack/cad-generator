@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from postgrest.exceptions import APIError
 from uuid import UUID, uuid4
 
 from app.config import settings
@@ -43,7 +44,15 @@ def create_project(request: ProjectCreateRequest) -> ProjectResponse:
     """Create and return a new Supabase project."""
 
     user_id = str(request.user_id) if request.user_id else None
-    return ProjectResponse(**SupabaseService().create_project(request.title, user_id))
+    try:
+        return ProjectResponse(**SupabaseService().create_project(request.title, user_id))
+    except APIError as exc:
+        if exc.args and isinstance(exc.args[0], dict) and exc.args[0].get("code") == "23503":
+            raise HTTPException(
+                status_code=400,
+                detail="user_id must belong to an existing Supabase Auth user; omit it for an anonymous project",
+            ) from exc
+        raise
 
 
 @app.get("/projects", response_model=list[ProjectResponse])
@@ -118,6 +127,13 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
             filename="",
             error=exc.to_response(),
         )
+    except APIError as exc:
+        if exc.args and isinstance(exc.args[0], dict) and exc.args[0].get("code") == "23503":
+            raise HTTPException(
+                status_code=400,
+                detail="user_id must belong to an existing Supabase Auth user; omit it for an anonymous project",
+            ) from exc
+        raise
 
 
 @app.get("/projects/{project_id}/history")
