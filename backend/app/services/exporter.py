@@ -92,3 +92,23 @@ def export_target(target: Any, export_format: ExportFormat) -> Tuple[str, str, s
             )
     except Exception as exc:
         raise ExportError(f"failed to export as {export_format}: {exc}", exc) from exc
+
+
+def export_target_bytes(target: Any, export_format: ExportFormat) -> Tuple[bytes, str, str]:
+    """Export a target and return raw bytes, media type, and filename."""
+
+    suffixes = {"gltf": ".glb", "step": ".step", "stl": ".stl", "svg": ".svg"}
+    media_types = {
+        "gltf": "model/gltf-binary",
+        "step": "application/step",
+        "stl": "model/stl",
+        "svg": "image/svg+xml",
+    }
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="cad-generator-") as directory:
+            output_path = str(Path(directory) / f"model{suffixes[export_format]}")
+            _write_export(target, export_format, output_path)
+            return Path(output_path).read_bytes(), media_types[export_format], f"model{suffixes[export_format]}"
+    except Exception as exc:
+        raise ExportError(f"failed to export as {export_format}: {exc}", exc) from exc

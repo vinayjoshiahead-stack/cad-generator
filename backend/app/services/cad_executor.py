@@ -2,12 +2,13 @@
 
 import builtins
 import traceback
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import cadquery as cq
 
 from app.models.schema import ExecuteResponse, ExportFormat, ExecutionErrorResponse
-from app.services.exporter import ExportError, export_target
+from app.services.exporter import ExportError, export_target, export_target_bytes
 
 
 SAMPLE_CODE = """import cadquery as cq
@@ -31,6 +32,12 @@ class CadExecutionError(Exception):
             message=self.message,
             traceback=self.trace,
         )
+
+
+@dataclass
+class CadExecutionResult:
+    response: ExecuteResponse
+    target: Any
 
 
 def _safe_import(name: str, globals_dict: Optional[Dict[str, Any]] = None, locals_dict: Optional[Dict[str, Any]] = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
@@ -123,3 +130,37 @@ def execute_cadquery(source: str, export_format: ExportFormat) -> ExecuteRespons
             str(exc),
             traceback.format_exc(),
         ) from exc
+
+
+def execute_cadquery_with_target(source: str, export_format: ExportFormat) -> CadExecutionResult:
+    """Run source, export the requested format, and retain the target for persistence."""
+
+    source_to_run = source.strip() or SAMPLE_CODE
+    try:
+        namespace = _execute_source(source_to_run)
+        target = _find_target(namespace)
+        _validate_target(target)
+        data, media_type, filename, metadata = export_target(target, export_format)
+        return CadExecutionResult(
+            response=ExecuteResponse(
+                export_format=export_format,
+                data=data,
+                media_type=media_type,
+                filename=filename,
+                metadata=metadata,
+            ),
+            target=target,
+        )
+    except ExportError as exc:
+        raise CadExecutionError("ExportError", str(exc), exc.traceback) from exc
+    except Exception as exc:
+        raise CadExecutionError(type(exc).__name__, str(exc), traceback.format_exc()) from exc
+
+
+def export_all_formats(target: Any) -> Dict[str, tuple[bytes, str, str]]:
+    """Create all artifacts needed by the Supabase-backed generation record."""
+
+    return {
+        export_format: export_target_bytes(target, export_format)
+        for export_format in ("gltf", "step", "stl", "svg")
+    }
