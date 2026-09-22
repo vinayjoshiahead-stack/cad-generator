@@ -17,9 +17,15 @@ class SupabaseService:
 
     def __init__(self, url: Optional[str] = None, key: Optional[str] = None) -> None:
         supabase_url = url or os.getenv("SUPABASE_URL")
-        supabase_key = key or os.getenv("SUPABASE_KEY")
+        supabase_key = (
+            key
+            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            or os.getenv("SUPABASE_KEY")
+        )
         if not supabase_url or not supabase_key:
-            raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be configured")
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured"
+            )
         self.client: Client = create_client(supabase_url, supabase_key)
 
     def upload_artifact(self, file_bytes: bytes, file_path: str, content_type: str) -> str:
