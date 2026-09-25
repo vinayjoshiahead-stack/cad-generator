@@ -1,6 +1,6 @@
 """FastAPI application entry point."""
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from postgrest.exceptions import APIError
 from uuid import UUID, uuid4
@@ -27,7 +27,7 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_origin_regex=settings.allowed_origin_regex,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -76,11 +76,18 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
         )
 
     try:
+        project_id = str(request.project_id) if request.project_id else None
+        service = SupabaseService() if project_id else None
+        if project_id and not service.project_exists(project_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"project {project_id} was not found",
+            )
+
         execution = execute_cadquery_with_target(request.code, request.export_format)
         response = execution.response
-        service = SupabaseService()
-        project_id = str(request.project_id) if request.project_id else None
         if not project_id:
+            service = SupabaseService()
             title = request.user_prompt.strip()[:200] or "Untitled CAD Project"
             user_id = str(request.user_id) if request.user_id else None
             project = service.create_project(title, user_id)
@@ -141,3 +148,15 @@ def project_history(project_id: UUID) -> list[dict]:
     """Return all saved generations for a project in version order."""
 
     return SupabaseService().get_project_history(str(project_id))
+
+
+@app.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(project_id: UUID) -> Response:
+    """Delete a project and all of its model generations."""
+
+    if not SupabaseService().delete_project(str(project_id)):
+        raise HTTPException(
+            status_code=404,
+            detail=f"project {project_id} was not found",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

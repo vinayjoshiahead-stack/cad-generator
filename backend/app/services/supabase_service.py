@@ -48,6 +48,18 @@ class SupabaseService:
             raise RuntimeError("Supabase did not return the inserted project")
         return response.data[0]
 
+    def project_exists(self, project_id: str) -> bool:
+        """Return whether a project exists for the supplied identifier."""
+
+        response = (
+            self.client.table("projects")
+            .select("id")
+            .eq("id", project_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(response.data)
+
     def list_projects(self, user_id: Optional[str] = None) -> list[Dict[str, Any]]:
         """Return projects, optionally filtered by owner."""
 
@@ -56,6 +68,14 @@ class SupabaseService:
             query = query.eq("user_id", user_id)
         response = query.order("updated_at", desc=True).execute()
         return response.data or []
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project and its generations through the database cascade."""
+
+        if not self.project_exists(project_id):
+            return False
+        self.client.table("projects").delete().eq("id", project_id).execute()
+        return True
 
     def save_generation_record(
         self,

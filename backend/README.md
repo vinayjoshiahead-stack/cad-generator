@@ -21,6 +21,8 @@ FastAPI service for executing CadQuery scripts and returning CAD exports as base
 
 Add `project_id`, `parent_generation_id`, and `user_prompt` to persist a generation in Supabase. When `project_id` is present, the endpoint uploads all four artifacts to the `cad-artifacts` bucket and returns `generation_id` plus `artifact_urls`. `GET /projects/{project_id}/history` returns the saved timeline.
 
+`DELETE /projects/{project_id}` deletes a project. The database foreign-key cascade deletes all model generations belonging to that project.
+
 Copy the repository `.env.example` to `.env` and set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Run `supabase_schema.sql` in the Supabase SQL editor before enabling persistence. The service-role key bypasses table RLS for this server-side backend and must never be exposed to the frontend. The backend also accepts the legacy `SUPABASE_KEY` variable as a fallback.
 
 Supported formats are `gltf` (binary GLB), `step`, `stl`, and `svg`. A script must assign either `result` to a `cq.Workplane`/shape or `assy` to a `cq.Assembly`. An empty `code` value runs the built-in sample cube.
