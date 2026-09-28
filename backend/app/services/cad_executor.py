@@ -1,11 +1,17 @@
-"""Controlled CadQuery script execution and error shaping."""
+"""Controlled CadQuery/script execution and build123d compatibility handling."""
 
 import builtins
+import math
 import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import cadquery as cq
+
+try:
+    import build123d as bd
+except Exception:  # pragma: no cover - optional dependency in some environments
+    bd = None
 
 from app.models.schema import ExecuteResponse, ExportFormat, ExecutionErrorResponse
 from app.services.exporter import ExportError, export_target, export_target_bytes
@@ -38,10 +44,13 @@ class CadExecutionError(Exception):
 class CadExecutionResult:
     response: ExecuteResponse
     target: Any
+    geometry_telemetry: Dict[str, Any] | None = None
 
 
 def _safe_import(name: str, globals_dict: Optional[Dict[str, Any]] = None, locals_dict: Optional[Dict[str, Any]] = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
     allowed_roots = {"cadquery", "math"}
+    if bd is not None:
+        allowed_roots.add("build123d")
     root = name.split(".", 1)[0]
     if level != 0 or root not in allowed_roots:
         raise ImportError(f"imports are restricted; cannot import {name!r}")
@@ -81,25 +90,101 @@ def _execute_source(source: str) -> Dict[str, Any]:
         "__builtins__": _SAFE_BUILTINS,
         "cq": cq,
         "cadquery": cq,
+        "math": math,
     }
+    if bd is not None:
+        namespace.update({
+            "bd": bd,
+            "build123d": bd,
+        })
+        for name in dir(bd):
+            if not name.startswith("_"):
+                namespace[name] = getattr(bd, name)
     exec(compile(source, "<cadquery-script>", "exec"), namespace, namespace)
     return namespace
 
 
+def _unwrap_target(target: Any) -> Any:
+    if bd is not None and isinstance(target, bd.BuildPart):
+        return target.part
+    return target
+
+
 def _find_target(namespace: Dict[str, Any]) -> Any:
-    if "result" in namespace:
-        return namespace["result"]
-    if "assy" in namespace:
-        return namespace["assy"]
-    raise NameError("script must define either 'result' (Workplane/Solid) or 'assy' (Assembly)")
+    for key in ("result", "part", "assembly", "assy"):
+        if key in namespace and namespace[key] is not None:
+            return _unwrap_target(namespace[key])
+    raise NameError("script must define either 'result', 'part', or 'assy' / 'assembly' payload")
 
 
 def _validate_target(target: Any) -> None:
-    supported = (cq.Workplane, cq.Shape, cq.Assembly)
+    build123d_types: tuple[type[Any], ...] = ()
+    if bd is not None:
+        build123d_types = (
+            getattr(bd, "Shape", type(None)),
+            getattr(bd, "Part", type(None)),
+            getattr(bd, "Compound", type(None)),
+            getattr(bd, "Solid", type(None)),
+            getattr(bd, "BuildPart", type(None)),
+        )
+    supported = (cq.Workplane, cq.Shape, cq.Assembly) + build123d_types
     if not isinstance(target, supported):
         raise TypeError(
-            "target must be a cadquery.Workplane, cadquery.Shape/Solid, or cadquery.Assembly"
+            "target must be a cadquery.Workplane, cadquery.Shape/Solid, cadquery.Assembly, or a build123d shape"
         )
+
+
+def inspect_and_validate_build123d(shape: Any, allow_multiple_solids: bool = False) -> dict:
+    """Apply the deterministic geometry checks expected by the migration plan."""
+    if bd is None or not hasattr(shape, "solids"):
+        return {}
+
+    solids = shape.solids()
+    solid_count = len(solids)
+    if solid_count == 0:
+        raise ValueError("GeometryValidationError: The script produced 0 solids (empty geometry). Check extrude/boolean operations.")
+
+    if not allow_multiple_solids and solid_count > 1:
+        boxes = []
+        for idx, solid in enumerate(solids):
+            bb = solid.bounding_box()
+            boxes.append(
+                f"Solid #{idx + 1}: min=({bb.min.X:.2f}, {bb.min.Y:.2f}, {bb.min.Z:.2f}), "
+                f"max=({bb.max.X:.2f}, {bb.max.Y:.2f}, {bb.max.Z:.2f}), vol={solid.volume:.2f}mm³"
+            )
+        details = "; ".join(boxes)
+        raise ValueError(
+            f"TopologicalFloatingPartsError: Expected 1 connected solid body, but generated {solid_count} "
+            f"disconnected floating solids! Ensure components touch or overlap before union/addition. "
+            f"Detected solids: [{details}]"
+        )
+
+    if not getattr(shape, "is_valid", True):
+        raise ValueError("TopologyError: OpenCASCADE BRepCheck reported invalid non-manifold topology (check fillets/chamfers or self-intersecting sketches).")
+
+    total_volume = sum(s.volume for s in solids)
+    if total_volume <= 1e-3:
+        raise ValueError(f"ZeroVolumeError: Generated solid has near-zero or negative volume ({total_volume:.4f} mm³).")
+
+    bb = shape.bounding_box()
+    return {
+        "engine": "build123d",
+        "solid_count": solid_count,
+        "face_count": len(shape.faces()),
+        "edge_count": len(shape.edges()),
+        "volume_mm3": round(total_volume, 2),
+        "bounding_box": {
+            "xlen": round(bb.size.X, 2),
+            "ylen": round(bb.size.Y, 2),
+            "zlen": round(bb.size.Z, 2),
+            "xmin": round(bb.min.X, 2),
+            "ymin": round(bb.min.Y, 2),
+            "zmin": round(bb.min.Z, 2),
+            "xmax": round(bb.max.X, 2),
+            "ymax": round(bb.max.Y, 2),
+            "zmax": round(bb.max.Z, 2),
+        },
+    }
 
 
 def execute_cadquery(source: str, export_format: ExportFormat) -> ExecuteResponse:
@@ -110,13 +195,18 @@ def execute_cadquery(source: str, export_format: ExportFormat) -> ExecuteRespons
         namespace = _execute_source(source_to_run)
         target = _find_target(namespace)
         _validate_target(target)
+        telemetry = inspect_and_validate_build123d(target) if bd is not None and hasattr(target, "solids") else {}
         data, media_type, filename, metadata = export_target(target, export_format)
+        metadata = dict(metadata)
+        if telemetry:
+            metadata["geometry_telemetry"] = telemetry
         return ExecuteResponse(
             export_format=export_format,
             data=data,
             media_type=media_type,
             filename=filename,
             metadata=metadata,
+            geometry_telemetry=telemetry,
         )
     except ExportError as exc:
         raise CadExecutionError(
@@ -140,16 +230,23 @@ def execute_cadquery_with_target(source: str, export_format: ExportFormat) -> Ca
         namespace = _execute_source(source_to_run)
         target = _find_target(namespace)
         _validate_target(target)
+        telemetry = inspect_and_validate_build123d(target) if bd is not None and hasattr(target, "solids") else {}
         data, media_type, filename, metadata = export_target(target, export_format)
+        metadata = dict(metadata)
+        if telemetry:
+            metadata["geometry_telemetry"] = telemetry
+        response = ExecuteResponse(
+            export_format=export_format,
+            data=data,
+            media_type=media_type,
+            filename=filename,
+            metadata=metadata,
+            geometry_telemetry=telemetry,
+        )
         return CadExecutionResult(
-            response=ExecuteResponse(
-                export_format=export_format,
-                data=data,
-                media_type=media_type,
-                filename=filename,
-                metadata=metadata,
-            ),
+            response=response,
             target=target,
+            geometry_telemetry=telemetry,
         )
     except ExportError as exc:
         raise CadExecutionError("ExportError", str(exc), exc.traceback) from exc

@@ -20,6 +20,17 @@ WORKDIR /app
 
 COPY backend/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade --no-cache-dir pip setuptools wheel \
+    && python -m pip install --no-cache-dir \
+        "numpy==1.26.4" \
+        "build123d==0.12.0" \
+        "cadquery==2.4.0" \
+        "fastapi>=0.110.0" \
+        "uvicorn>=0.28.0" \
+        "supabase>=2.3.0" \
+        "pydantic>=2.6.0" \
+        "trimesh>=4.1.0" \
+        "python-multipart>=0.0.9" \
+        "python-dotenv>=1.0.0" \
     && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app

@@ -64,6 +64,7 @@ class ExecuteResponse(BaseModel):
     filename: str
     error: Optional[ExecutionErrorResponse] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    geometry_telemetry: Dict[str, Any] = Field(default_factory=dict)
     generation_id: Optional[str] = None
     project_id: Optional[str] = None
     artifact_urls: Optional[ArtifactUrls] = None
