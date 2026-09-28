@@ -1,4 +1,4 @@
-"""Controlled CadQuery/script execution and build123d compatibility handling."""
+"""Controlled build123d script execution and validation."""
 
 import builtins
 import math
@@ -6,20 +6,15 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-import cadquery as cq
-
-try:
-    import build123d as bd
-except Exception:  # pragma: no cover - optional dependency in some environments
-    bd = None
+import build123d as bd
 
 from app.models.schema import ExecuteResponse, ExportFormat, ExecutionErrorResponse
 from app.services.exporter import ExportError, export_target, export_target_bytes
 
 
-SAMPLE_CODE = """import cadquery as cq
+SAMPLE_CODE = """import build123d as bd
 
-result = cq.Workplane(\"XY\").box(20, 20, 5).edges(\"|Z\").fillet(2)
+result = bd.Box(20, 20, 5)
 """
 
 
@@ -48,9 +43,7 @@ class CadExecutionResult:
 
 
 def _safe_import(name: str, globals_dict: Optional[Dict[str, Any]] = None, locals_dict: Optional[Dict[str, Any]] = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
-    allowed_roots = {"cadquery", "math"}
-    if bd is not None:
-        allowed_roots.add("build123d")
+    allowed_roots = {"build123d", "math"}
     root = name.split(".", 1)[0]
     if level != 0 or root not in allowed_roots:
         raise ImportError(f"imports are restricted; cannot import {name!r}")
@@ -88,24 +81,19 @@ _SAFE_BUILTINS["range"] = range
 def _execute_source(source: str) -> Dict[str, Any]:
     namespace: Dict[str, Any] = {
         "__builtins__": _SAFE_BUILTINS,
-        "cq": cq,
-        "cadquery": cq,
+        "bd": bd,
+        "build123d": bd,
         "math": math,
     }
-    if bd is not None:
-        namespace.update({
-            "bd": bd,
-            "build123d": bd,
-        })
-        for name in dir(bd):
-            if not name.startswith("_"):
-                namespace[name] = getattr(bd, name)
-    exec(compile(source, "<cadquery-script>", "exec"), namespace, namespace)
+    for name in dir(bd):
+        if not name.startswith("_"):
+            namespace[name] = getattr(bd, name)
+    exec(compile(source, "<build123d-script>", "exec"), namespace, namespace)
     return namespace
 
 
 def _unwrap_target(target: Any) -> Any:
-    if bd is not None and isinstance(target, bd.BuildPart):
+    if isinstance(target, bd.BuildPart):
         return target.part
     return target
 
@@ -118,25 +106,20 @@ def _find_target(namespace: Dict[str, Any]) -> Any:
 
 
 def _validate_target(target: Any) -> None:
-    build123d_types: tuple[type[Any], ...] = ()
-    if bd is not None:
-        build123d_types = (
-            getattr(bd, "Shape", type(None)),
-            getattr(bd, "Part", type(None)),
-            getattr(bd, "Compound", type(None)),
-            getattr(bd, "Solid", type(None)),
-            getattr(bd, "BuildPart", type(None)),
-        )
-    supported = (cq.Workplane, cq.Shape, cq.Assembly) + build123d_types
+    supported = (
+        bd.Shape,
+        bd.Part,
+        bd.Compound,
+        bd.Solid,
+        bd.BuildPart,
+    )
     if not isinstance(target, supported):
-        raise TypeError(
-            "target must be a cadquery.Workplane, cadquery.Shape/Solid, cadquery.Assembly, or a build123d shape"
-        )
+        raise TypeError("target must be a build123d Shape/Part/Compound/Solid or BuildPart")
 
 
 def inspect_and_validate_build123d(shape: Any, allow_multiple_solids: bool = False) -> dict:
-    """Apply the deterministic geometry checks expected by the migration plan."""
-    if bd is None or not hasattr(shape, "solids"):
+    """Apply the deterministic geometry checks required by the migration plan."""
+    if not hasattr(shape, "solids"):
         return {}
 
     solids = shape.solids()
@@ -187,7 +170,7 @@ def inspect_and_validate_build123d(shape: Any, allow_multiple_solids: bool = Fal
     }
 
 
-def execute_cadquery(source: str, export_format: ExportFormat) -> ExecuteResponse:
+def execute_build123d(source: str, export_format: ExportFormat) -> ExecuteResponse:
     """Run source, locate its target, export it, and convert failures to API data."""
 
     source_to_run = source.strip() or SAMPLE_CODE
@@ -195,7 +178,8 @@ def execute_cadquery(source: str, export_format: ExportFormat) -> ExecuteRespons
         namespace = _execute_source(source_to_run)
         target = _find_target(namespace)
         _validate_target(target)
-        telemetry = inspect_and_validate_build123d(target) if bd is not None and hasattr(target, "solids") else {}
+        allow_multiple_solids = bool(namespace.get("allow_multiple_solids", False))
+        telemetry = inspect_and_validate_build123d(target, allow_multiple_solids=allow_multiple_solids)
         data, media_type, filename, metadata = export_target(target, export_format)
         metadata = dict(metadata)
         if telemetry:
@@ -209,20 +193,12 @@ def execute_cadquery(source: str, export_format: ExportFormat) -> ExecuteRespons
             geometry_telemetry=telemetry,
         )
     except ExportError as exc:
-        raise CadExecutionError(
-            "ExportError",
-            str(exc),
-            exc.traceback,
-        ) from exc
+        raise CadExecutionError("ExportError", str(exc), exc.traceback) from exc
     except Exception as exc:
-        raise CadExecutionError(
-            type(exc).__name__,
-            str(exc),
-            traceback.format_exc(),
-        ) from exc
+        raise CadExecutionError(type(exc).__name__, str(exc), traceback.format_exc()) from exc
 
 
-def execute_cadquery_with_target(source: str, export_format: ExportFormat) -> CadExecutionResult:
+def execute_build123d_with_target(source: str, export_format: ExportFormat) -> CadExecutionResult:
     """Run source, export the requested format, and retain the target for persistence."""
 
     source_to_run = source.strip() or SAMPLE_CODE
@@ -230,7 +206,8 @@ def execute_cadquery_with_target(source: str, export_format: ExportFormat) -> Ca
         namespace = _execute_source(source_to_run)
         target = _find_target(namespace)
         _validate_target(target)
-        telemetry = inspect_and_validate_build123d(target) if bd is not None and hasattr(target, "solids") else {}
+        allow_multiple_solids = bool(namespace.get("allow_multiple_solids", False))
+        telemetry = inspect_and_validate_build123d(target, allow_multiple_solids=allow_multiple_solids)
         data, media_type, filename, metadata = export_target(target, export_format)
         metadata = dict(metadata)
         if telemetry:

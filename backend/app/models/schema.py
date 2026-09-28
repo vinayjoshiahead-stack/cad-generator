@@ -10,9 +10,9 @@ ExportFormat = Literal["gltf", "step", "stl", "svg"]
 
 
 class ExecuteRequest(BaseModel):
-    """User-supplied CadQuery program and requested output format."""
+    """User-supplied build123d program and requested output format."""
 
-    code: str = Field(default="", description="CadQuery Python source code.")
+    code: str = Field(default="", description="build123d Python source code.")
     export_format: ExportFormat = Field(default="gltf")
     user_prompt: str = Field(default="")
     user_id: Optional[UUID] = Field(default=None)

@@ -15,7 +15,7 @@ from app.models.schema import (
 )
 from app.services.cad_executor import (
     CadExecutionError,
-    execute_cadquery_with_target,
+    execute_build123d_with_target,
     export_all_formats,
 )
 from app.services.supabase_service import SupabaseService, artifact_path
@@ -36,7 +36,7 @@ app.add_middleware(
 def health() -> dict[str, str]:
     """Return a lightweight service and engine health response."""
 
-    return {"status": "ok", "engine": "CadQuery"}
+    return {"status": "ok", "engine": "build123d"}
 
 
 @app.post("/projects", response_model=ProjectResponse)
@@ -67,7 +67,7 @@ def list_projects(user_id: UUID = Query(..., description="Supabase user UUID."))
 
 @app.post("/execute", response_model=ExecuteResponse)
 def execute(request: ExecuteRequest) -> ExecuteResponse:
-    """Execute a CadQuery program and return its encoded export."""
+    """Execute a build123d program and return its encoded export."""
 
     if len(request.code) > settings.max_code_length:
         raise HTTPException(
@@ -84,7 +84,7 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
                 detail=f"project {project_id} was not found",
             )
 
-        execution = execute_cadquery_with_target(request.code, request.export_format)
+        execution = execute_build123d_with_target(request.code, request.export_format)
         response = execution.response
         if not project_id:
             service = SupabaseService()

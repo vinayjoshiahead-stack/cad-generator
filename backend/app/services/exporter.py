@@ -1,19 +1,12 @@
-"""CadQuery/build123d shape exporters and base64 response encoding."""
+"""build123d shape exporters and base64 response encoding."""
 
 import base64
-import os
 import tempfile
 import traceback
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import cadquery as cq
-import trimesh
-
-try:
-    import build123d as bd
-except Exception:  # pragma: no cover - dependency may be missing in some envs
-    bd = None
+import build123d as bd
 
 from app.models.schema import ExportFormat
 
@@ -27,36 +20,18 @@ class ExportError(Exception):
         self.traceback = traceback.format_exc()
 
 
-def _is_assembly(target: Any) -> bool:
-    return isinstance(target, cq.Assembly)
+def _normalize_target(target: Any) -> Any:
+    if isinstance(target, bd.BuildPart):
+        return target.part
+    return target
 
 
 def _is_build123d_shape(target: Any) -> bool:
-    return bd is not None and hasattr(target, "wrapped") and hasattr(target, "solids")
-
-
-def _normalize_build123d_target(target: Any) -> Any:
-    if bd is not None and isinstance(target, bd.BuildPart):
-        return target.part
-    if bd is not None and isinstance(target, (bd.Shape, bd.Compound, bd.Part, bd.Solid)):
-        return target
-    return target
-
-
-def _shape_for_export(target: Any) -> Any:
-    """Convert an assembly to a compound for mesh and projection exporters."""
-
-    if _is_assembly(target):
-        return target.toCompound()
-    return target
-
-
-def _export_cadquery(target: Any, path: str, export_type: str) -> None:
-    cq.exporters.export(_shape_for_export(target), path, exportType=export_type)
+    return isinstance(target, (bd.Shape, bd.Part, bd.Compound, bd.Solid))
 
 
 def _export_build123d_shape(target: Any, path: str, export_format: str) -> None:
-    shape = _normalize_build123d_target(target)
+    shape = _normalize_target(target)
     if export_format == "stl":
         bd.export_stl(shape, path, tolerance=1e-3, angular_tolerance=0.1)
         return
@@ -68,59 +43,19 @@ def _export_build123d_shape(target: Any, path: str, export_format: str) -> None:
         return
     if export_format == "svg":
         try:
-            render = bd.ExportSVG(shape, projection_dir=(1, -1, 1), with_hidden=True)
-            svg_text = render.to_svg()
+            svg_text = bd.ExportSVG(shape, with_hidden=True).to_svg()
         except Exception:
-            svg_text = shape.to_splines()
-            if hasattr(svg_text, "to_svg"):
-                svg_text = svg_text.to_svg()
-            elif not isinstance(svg_text, str):
-                svg_text = str(svg_text)
+            svg_text = str(shape.to_splines())
         Path(path).write_text(svg_text, encoding="utf-8")
         return
     raise ValueError(f"unsupported export format: {export_format}")
 
 
-def _export_gltf(target: Any, path: str) -> None:
-    """Export through STL and let trimesh produce a binary glTF file."""
-
-    if _is_build123d_shape(target):
-        _export_build123d_shape(target, path, "gltf")
-        return
-
-    with tempfile.TemporaryDirectory(prefix="cadquery-stl-") as directory:
-        stl_path = os.path.join(directory, "model.stl")
-        _export_cadquery(target, stl_path, "STL")
-        mesh = trimesh.load(stl_path, file_type="stl", force="mesh", process=False)
-        if isinstance(mesh, trimesh.Scene):
-            scene = mesh
-        else:
-            scene = trimesh.Scene(mesh)
-        scene.export(path, file_type="glb")
-
-
 def _write_export(target: Any, export_format: ExportFormat, path: str) -> None:
-    if export_format == "gltf":
-        _export_gltf(target, path)
-    elif export_format == "step":
-        if _is_assembly(target):
-            target.save(path, exportType="STEP")
-        elif _is_build123d_shape(target):
-            _export_build123d_shape(target, path, "step")
-        else:
-            _export_cadquery(target, path, "STEP")
-    elif export_format == "stl":
-        if _is_build123d_shape(target):
-            _export_build123d_shape(target, path, "stl")
-        else:
-            _export_cadquery(target, path, "STL")
-    elif export_format == "svg":
-        if _is_build123d_shape(target):
-            _export_build123d_shape(target, path, "svg")
-        else:
-            _export_cadquery(target, path, "SVG")
-    else:
-        raise ValueError(f"unsupported export format: {export_format}")
+    if _is_build123d_shape(target):
+        _export_build123d_shape(target, path, export_format)
+        return
+    raise ValueError(f"unsupported target type for build123d export: {type(target)!r}")
 
 
 def export_target(target: Any, export_format: ExportFormat) -> Tuple[str, str, str, Dict[str, Any]]:
